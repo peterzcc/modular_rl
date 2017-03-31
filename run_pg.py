@@ -28,7 +28,8 @@ if __name__ == "__main__":
     update_argument_parser(parser, agent_ctor.options)
     args = parser.parse_args()
     if args.timestep_limit == 0: 
-        args.timestep_limit = env_spec.timestep_limit    
+        args.timestep_limit = env_spec.timestep_limit
+        print("timestep limit: %d" % args.timestep_limit)
     cfg = args.__dict__
     np.random.seed(args.seed)
     agent = agent_ctor(env.observation_space, env.action_space, cfg)
@@ -41,8 +42,8 @@ if __name__ == "__main__":
         global COUNTER
         COUNTER += 1  
         # Print stats
-        print "*********** Iteration %i ****************" % COUNTER
-        print tabulate(filter(lambda (k,v) : np.asarray(v).size==1, stats.items())) #pylint: disable=W0110
+        print("*********** Iteration %i ****************" % COUNTER)
+        print(tabulate(filter(lambda (k,v) : np.asarray(v).size==1, stats.items()))) #pylint: disable=W0110
         # Store to hdf5
         if args.use_hdf:
             for (stat,val) in stats.items():
@@ -62,6 +63,6 @@ if __name__ == "__main__":
     if args.use_hdf:
         hdf['env_id'] = env_spec.id
         try: hdf['env'] = np.array(cPickle.dumps(env, -1))
-        except Exception: print "failed to pickle env" #pylint: disable=W0703
+        except Exception: print("failed to pickle env") #pylint: disable=W0703
     
     env.monitor.close()

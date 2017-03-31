@@ -46,20 +46,28 @@ def add_prefixed_stats(stats, prefix, d):
 # Policy Gradients 
 # ================================================================
 
-def compute_advantage(vf, paths, gamma, lam):
-    # Compute return, baseline, advantage
-    for path in paths:
-        path["return"] = discount(path["reward"], gamma)
-        b = path["baseline"] = vf.predict(path)
-        b1 = np.append(b, 0 if path["terminated"] else b[-1])
-        deltas = path["reward"] + gamma*b1[1:] - b1[:-1] 
-        path["advantage"] = discount(deltas, gamma * lam)
-    alladv = np.concatenate([path["advantage"] for path in paths])    
-    # Standardize advantage
-    std = alladv.std()
-    mean = alladv.mean()
-    for path in paths:
-        path["advantage"] = (path["advantage"] - mean) / std
+def compute_advantage(vf, paths, gamma, lam,use_gae=False,normalize=False):
+    if use_gae:
+        # Compute return, baseline, advantage
+        for path in paths:
+            path["return"] = discount(path["reward"], gamma)
+            b = path["baseline"] = vf.predict(path)
+            b1 = np.append(b, 0 if path["terminated"] else b[-1])
+            deltas = path["reward"] + gamma*b1[1:] - b1[:-1]
+            path["advantage"] = discount(deltas, gamma * lam)
+    else:
+        for path in paths:
+            path["return"] = discount(path["reward"], gamma)
+            b = path["baseline"] = vf.predict(path)
+            path["advantage"] = path["return"]-b
+    if normalize:
+        alladv = np.concatenate([path["advantage"] for path in paths])
+        # Standardize advantage
+        std = alladv.std()
+        mean = alladv.mean()
+        for path in paths:
+            path["advantage"] = (path["advantage"] - mean) / std
+    assert 1
 
 
 
@@ -85,8 +93,18 @@ def run_policy_gradient_algorithm(env, agent, usercfg=None, callback=None):
 
     for _ in xrange(cfg["n_iter"]):
         # Rollouts ========
+        #  TODO: implement a base agent class that collect paths
         paths = get_paths(env, agent, cfg, seed_iter)
+        '''
+         Note: so this is a batch update algorithm
+         agent.baseline should be a model
+         Only one update per epoch, could be good for parallel training
+
+        '''
         compute_advantage(agent.baseline, paths, gamma=cfg["gamma"], lam=cfg["lam"])
+        '''
+        value function approximator, should be straight-forward to implement
+        '''
         # VF Update ========
         vf_stats = agent.baseline.fit(paths)
         # Pol Update ========
@@ -394,6 +412,7 @@ class NnRegression(EzPickle):
         EzPickle.__init__(self, net, mixfrac, maxiter)
         self.net = net
         self.mixfrac = mixfrac
+        print("mixfrac: "+str(mixfrac))
 
         x_nx = net.input
         self.predict = theano.function([x_nx], net.output, **FNOPTS)

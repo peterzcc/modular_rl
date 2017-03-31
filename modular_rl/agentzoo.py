@@ -46,7 +46,7 @@ def make_mlps(ob_space, ac_space, cfg):
         inshp = dict(input_shape=(ob_space.shape[0]+1,)) if i==0 else {} # add one extra feature for timestep
         vfnet.add(Dense(layeroutsize, activation=cfg["activation"], **inshp))
     vfnet.add(Dense(1))
-    baseline = NnVf(vfnet, cfg["timestep_limit"], dict(mixfrac=0.1))
+    baseline = NnVf(vfnet, cfg["timestep_limit"], dict(mixfrac=1.0))
     return policy, baseline
 
 def make_deterministic_mlp(ob_space, ac_space, cfg):
@@ -115,6 +115,7 @@ class TrpoAgent(AgentWithPolicy):
     options = MLP_OPTIONS + PG_OPTIONS + TrpoUpdater.options + FILTER_OPTIONS
     def __init__(self, ob_space, ac_space, usercfg):
         cfg = update_default_config(self.options, usercfg)
+
         policy, self.baseline = make_mlps(ob_space, ac_space, cfg)
         obfilter, rewfilter = make_filters(cfg, ob_space)
         self.updater = TrpoUpdater(policy, cfg)

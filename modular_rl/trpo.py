@@ -17,29 +17,33 @@ class TrpoUpdater(EzFlat, EzPickle):
 
         self.stochpol = stochpol
         self.cfg = cfg
+        """
+        StochPolicyKeras(net,DiagGauss)
+        """
 
-        probtype = stochpol.probtype
+        probtype = stochpol.probtype #DiagGauss
         params = stochpol.trainable_variables
         EzFlat.__init__(self, params)
 
-        ob_no = stochpol.input
-        act_na = probtype.sampled_variable()
+        ob_no = stochpol.input #Tensor.input
+        act_na = probtype.sampled_variable() # T.matrix('a')
         adv_n = T.vector("adv_n")
 
         # Probability distribution:
         prob_np = stochpol.get_output()
-        oldprob_np = probtype.prob_variable()
+        oldprob_np = probtype.prob_variable() # T.matrix('prob') TODO: why is it only a tensor?
 
         logp_n = probtype.loglikelihood(act_na, prob_np)
         oldlogp_n = probtype.loglikelihood(act_na, oldprob_np)
         N = ob_no.shape[0]
 
         # Policy gradient:
-        surr = (-1.0 / N) * T.exp(logp_n - oldlogp_n).dot(adv_n)
+        ratio_n = (-1.0 / N) * T.exp(logp_n - oldlogp_n)
+        surr = ratio_n.dot(adv_n) # should be the loss term
         pg = flatgrad(surr, params)
 
         prob_np_fixed = theano.gradient.disconnected_grad(prob_np)
-        kl_firstfixed = probtype.kl(prob_np_fixed, prob_np).sum()/N
+        kl_firstfixed = probtype.kl(prob_np_fixed, prob_np).sum()/N # kl between current fixed and the next step
         grads = T.grad(kl_firstfixed, params)
         flat_tangent = T.fvector(name="flat_tan")
         shapes = [var.get_value(borrow=True).shape for var in params]
@@ -49,11 +53,12 @@ class TrpoUpdater(EzFlat, EzPickle):
             size = np.prod(shape)
             tangents.append(T.reshape(flat_tangent[start:start+size], shape))
             start += size
+        # sum of all elements in g*tangent, TODO: what is tangent? could be an update step
         gvp = T.add(*[T.sum(g*tangent) for (g, tangent) in zipsame(grads, tangents)]) #pylint: disable=E1111
         # Fisher-vector product
-        fvp = flatgrad(gvp, params)
+        fvp = flatgrad(gvp, params) # flattened grad
 
-        ent = probtype.entropy(prob_np).mean()
+        ent = probtype.entropy(prob_np).mean() #Entropy term, should be straight-forward to implement
         kl = probtype.kl(oldprob_np, prob_np).mean()
 
         losses = [surr, kl, ent]
@@ -61,21 +66,27 @@ class TrpoUpdater(EzFlat, EzPickle):
 
         args = [ob_no, act_na, adv_n, oldprob_np]
 
-        self.compute_policy_gradient = theano.function(args, pg, **FNOPTS)
-        self.compute_losses = theano.function(args, losses, **FNOPTS)
+        self.compute_policy_gradient = theano.function(args, pg, **FNOPTS) # td loss gradient
+        self.compute_debug = theano.function(args, [ratio_n,N,prob_np,oldprob_np], **FNOPTS)
+        self.compute_losses = theano.function(args, losses, **FNOPTS) # td loss, kl, ebtropy TODO: why kl?
         self.compute_fisher_vector_product = theano.function([flat_tangent] + args, fvp, **FNOPTS)
 
     def __call__(self, paths):
         cfg = self.cfg
-        prob_np = concat([path["prob"] for path in paths])
+        prob_np = concat([path["prob"] for path in paths]) #self._act_prob(ob[None])[0]
         ob_no = concat([path["observation"] for path in paths])
         action_na = concat([path["action"] for path in paths])
         advantage_n = concat([path["advantage"] for path in paths])
         args = (ob_no, action_na, advantage_n, prob_np)
+        print("advantage_n: {}".format(np.linalg.norm(advantage_n)))
 
         thprev = self.get_params_flat()
         def fisher_vector_product(p):
             return self.compute_fisher_vector_product(p, *args)+cfg["cg_damping"]*p #pylint: disable=E1101,W0640
+        # ratio_n, N_output, dist,old_dist = self.compute_debug(*args)
+        is_overflow = np.logical_or(action_na>=1,action_na<=-1)
+        print("act overflows: {}".format(np.count_nonzero(np.ravel(is_overflow))))
+        print "act means:", np.mean(action_na,axis=0)
         g = self.compute_policy_gradient(*args)
         losses_before = self.compute_losses(*args)
         if np.allclose(g, 0):
@@ -86,6 +97,7 @@ class TrpoUpdater(EzFlat, EzPickle):
             lm = np.sqrt(shs / cfg["max_kl"])
             print "lagrange multiplier:", lm, "gnorm:", np.linalg.norm(g)
             fullstep = stepdir / lm
+            print "fullstep:", np.linalg.norm(fullstep)
             neggdotstepdir = -g.dot(stepdir)
             def loss(th):
                 self.set_params_flat(th)
@@ -107,19 +119,19 @@ def linesearch(f, x, fullstep, expected_improve_rate, max_backtracks=10, accept_
     """
     fval = f(x)
     print "fval before", fval
-    for (_n_backtracks, stepfrac) in enumerate(.5**np.arange(max_backtracks)):
+    for (_n_backtracks, stepfrac) in enumerate(.5**np.arange(max_backtracks)):# 0.5^n
         xnew = x + stepfrac*fullstep
         newfval = f(xnew)
         actual_improve = fval - newfval
         expected_improve = expected_improve_rate*stepfrac
         ratio = actual_improve/expected_improve
-        print "a/e/r", actual_improve, expected_improve, ratio
+        print "k/a/e/r", stepfrac,actual_improve, expected_improve, ratio
         if ratio > accept_ratio and actual_improve > 0:
             print "fval after", newfval
             return True, xnew
     return False, x
 
-def cg(f_Ax, b, cg_iters=10, callback=None, verbose=False, residual_tol=1e-10):
+def cg(f_Ax, b, cg_iters=10, callback=None, verbose=True, residual_tol=1e-10):
     """
     Demmel p 312
     """
@@ -127,7 +139,7 @@ def cg(f_Ax, b, cg_iters=10, callback=None, verbose=False, residual_tol=1e-10):
     r = b.copy()
     x = np.zeros_like(b)
     rdotr = r.dot(r)
-
+    # print("x.dim: {}".format(x.shape))
     fmtstr =  "%10i %10.3g %10.3g"
     titlestr =  "%10s %10s %10s"
     if verbose: print titlestr % ("iter", "residual norm", "soln norm")
