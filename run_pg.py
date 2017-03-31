@@ -6,7 +6,8 @@ This script runs a policy gradient algorithm
 
 from gym.envs import make
 from modular_rl import *
-import argparse, sys, cPickle
+import argparse, sys
+import _pickle as cPickle
 from tabulate import tabulate
 import shutil, os, logging
 import gym
@@ -43,7 +44,10 @@ if __name__ == "__main__":
         COUNTER += 1  
         # Print stats
         print("*********** Iteration %i ****************" % COUNTER)
-        print(tabulate(filter(lambda (k,v) : np.asarray(v).size==1, stats.items()))) #pylint: disable=W0110
+        def remove_vectors(item):
+            k,v = item
+            return np.asarray(v).size==1
+        print(tabulate(filter(remove_vectors, list(stats.items())))) #pylint: disable=W0110
         # Store to hdf5
         if args.use_hdf:
             for (stat,val) in stats.items():

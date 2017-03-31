@@ -68,7 +68,7 @@ def update_default_config(tuples, usercfg):
     for (name,_,defval,_) in tuples:
         out[name] = defval
     if usercfg:
-        for (k,v) in usercfg.iteritems():
+        for (k,v) in list(usercfg.items()):
             if k in out:
                 out[k] = v
     return out
